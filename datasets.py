@@ -33,7 +33,15 @@ with warnings.catch_warnings():
 SPLIT_JSON: str = "data_split.json"
 
 # Datasets we can load and use.
-KNOWN_DATASETS: Set[str] = {"ljspeech", "libritts", "vctk"}
+KNOWN_DATASETS: Set[str] = {
+    "ljspeech",
+    "libritts",
+    "vctk",
+    "opencpop",
+    "m4singer",
+    "mix_jp",
+    "namine",
+}
 
 # How to split LJ dataset. LJ is split by taking the first K1 samples as test,
 # K2 samples as validation, and the rest as training.
@@ -205,7 +213,7 @@ class VocoderDataset(torch.utils.data.IterableDataset):
         self.validation = validation
         self.generate = generate
 
-    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor, str]]:
         """
         Iterate over this dataset.
 
@@ -214,12 +222,12 @@ class VocoderDataset(torch.utils.data.IterableDataset):
           the second is the waveforms.
         """
         shuffle_buffer = []
-        for clip_spec, clip_wave in self.raw_iter():
+        for clip_spec, clip_wave, wavname in self.raw_iter():
             if self.generate:
-                yield clip_spec, clip_wave
+                yield clip_spec, clip_wave, wavname
                 continue
 
-            clips = self.extract_clips(clip_spec, clip_wave)
+            clips = self.extract_clips(clip_spec, clip_wave, wavname)
             if self.validation:
                 # When validation, any order is fine.
                 yield from clips
@@ -238,8 +246,8 @@ class VocoderDataset(torch.utils.data.IterableDataset):
             yield from shuffle_buffer
 
     def extract_clips(
-        self, spectrogram: torch.Tensor, waveform: torch.Tensor
-    ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+        self, spectrogram: torch.Tensor, waveform: torch.Tensor, wavname: str,
+    ) -> List[Tuple[torch.Tensor, torch.Tensor, str]]:
         """
         Extract clips from a spectrogram and waveform.
         """
@@ -280,12 +288,13 @@ class VocoderDataset(torch.utils.data.IterableDataset):
                     (
                         spectrogram[:, start_frame:end_frame],
                         waveform[start_sample:end_sample],
+                        wavname,
                     )
                 )
 
         return clips
 
-    def raw_iter(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+    def raw_iter(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor, str]]:
         """
         Iterate over the dataset without extracting clips or batching.
 
@@ -325,7 +334,30 @@ class VocoderDataset(torch.utils.data.IterableDataset):
             # Length of spectrogram is exactly waveform length over hop length.
             spectrogram = self.mel(waveform)
 
-            yield spectrogram.squeeze(0), waveform.squeeze(0)
+            yield spectrogram.squeeze(0), waveform.squeeze(0), key
+
+
+class SingingDataset(torch.utils.data.Dataset):
+
+    def __init__(self, root: str) -> None:
+        """
+        Args:
+            root (string): Directory with all the wavs and metadata.csv.
+        """
+        self.root = root
+        self.wav_dir = os.path.join(root, 'wavs')
+
+    def __len__(self) -> int:
+        return len(self.metadata)
+
+    def __getitem__(self, idx) -> Tuple[torch.Tensor, int]:
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        
+        wav_path = os.path.join(self.wav_dir, idx + ".wav")
+        waveform, sample_rate = torchaudio.load(wav_path)
+        
+        return waveform, sample_rate
 
 
 def create_dataloader(
@@ -437,6 +469,20 @@ def load_dataset(path: str, config: DatasetConfig, num_generate_samples: int) ->
                 generate=True,
             ),
         )
+    elif name in ["opencpop", "mix_jp", "namine", "m4singer"]:
+        dset = SingingDataset(os.path.join(path, name))
+
+        return (
+            create_dataloader(dset, split["train"], config, validation=False),
+            create_dataloader(dset, split["validation"], config, validation=True),
+            create_dataloader(
+                dset,
+                split["test"],
+                config,
+                validation=False,
+                generate=True,
+            ),
+        )           
 
     raise ValueError(f"Unknown dataset {name}")
 
@@ -480,7 +526,12 @@ def download_command(dataset: str, path: str) -> None:
     required=True,
     help="Where the dataset is",
 )
-def split_command(dataset: str, path: str) -> None:
+@click.option(
+    "--src_path",
+    required=False,
+    help="Where the source dataset is",
+)
+def split_command(dataset: str, path: str, src_path: str = None) -> None:
     """
     Split into train / validation / test.
     """
@@ -547,6 +598,73 @@ def split_command(dataset: str, path: str) -> None:
             ],
             "test": indices[num_train_samples + num_validation_samples :],
         }
+    elif dataset in ["opencpop", "m4singer"]:
+        dset, train_list, valid_list, test_list = create_singset_from_espnet_recipe(
+            src_path, os.path.join(path, dataset)
+        )
+        split = {
+            "dataset": dataset,
+            "train": train_list,
+            "validation": valid_list,
+            "test": test_list,
+        }
 
     with open(os.path.join(path, SPLIT_JSON), "w") as handle:
         json.dump(split, handle)  # pyre-ignore
+
+
+def create_singset_from_espnet_recipe(
+    recipe_path: str,
+    target_path: str,
+):
+    wav_path = None
+    if os.path.exists(os.path.join(recipe_path, "wav_dump")):
+        wav_path = os.path.join(recipe_path, "wav_dump")
+    if wav_path is not None:
+        if not os.path.exists(os.path.join(target_path)):
+            os.makedirs(os.path.join(target_path))
+        
+        tg_wav_path = os.path.join(target_path, "wavs")
+        if not os.path.exists(tg_wav_path):
+            os.system(f"ln -s {wav_path} {tg_wav_path}")
+
+        with open(os.path.join(target_path, "metadata.csv"), "w", encoding="utf-8") as meta_writer:
+            for filename in os.listdir(tg_wav_path):
+                items = filename.split('.')
+                n_filename = ".".join(items[:-1])
+                meta_writer.write(f'{n_filename}\n')
+    else:
+        raise ValueError(f"**Error**: No wav directory in {recipe_path}.")
+    
+    train_list = []
+    valid_list = []
+    test_list = []
+    split_path = None   
+    if os.path.exists(os.path.join(recipe_path, "data")):
+        split_path = os.path.join(recipe_path, "data")
+    if split_path is not None:
+        train_set = None
+        for subset in ["tr_no_dev", "train"]:
+            if os.path.exists(os.path.join(split_path, subset)):
+                train_set = subset
+                break
+        valid_set = None
+        for subset in ["valid", "dev"]:
+            if os.path.exists(os.path.join(split_path, subset)):
+                valid_set = subset
+                break
+        test_set = None
+        for subset in ["test", "eval"]:
+            if os.path.exists(os.path.join(split_path, subset)):
+                test_set = subset
+                break
+        for subset, list in zip([train_set, valid_set, test_set], [train_list, valid_list, test_list]):
+            lines = open(os.path.join(split_path, subset, "wav.scp"))
+            for line in lines:
+                items = line.strip().split(' ')
+                list.append(items[0])
+    else:
+        raise ValueError(f"**Error**: No data directory in {recipe_path}.")
+    
+    dataset = SingingDataset(target_path)
+    return dataset, train_list, valid_list, test_list

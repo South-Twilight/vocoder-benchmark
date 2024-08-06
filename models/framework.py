@@ -36,11 +36,11 @@ from utils import die_if, hard_exit # @oss-only
 
 from utils import read_audio, write_audio # @oss-only
 # @fb-only: from langtech.tts.vocoders.utils import (  # @fb-only 
-    die_if,
-    hard_exit,
-    read_audio,
-    write_audio,
-)
+#     die_if,
+#     hard_exit,
+#     read_audio,
+#     write_audio,
+# )
 from omegaconf import OmegaConf
 from pytorch_msssim import ssim
 from torch import Tensor
@@ -602,7 +602,7 @@ def train_loop(  # noqa
         )
 
         data_loading_start_time = time.time()
-        spectrograms, waveforms = next(train_iterator)
+        spectrograms, waveforms, _ = next(train_iterator)
         if num_iterations > 0:
             # Skip the first iteration because it's very long and not representative.
             data_loading_total_time += time.time() - data_loading_start_time
@@ -795,7 +795,7 @@ def generate_tensorboard_samples(
     with torch.no_grad():
         ground_truth = []
         generated = []
-        for spec, wav in dataloader:
+        for spec, wav, _ in dataloader:
             ground_truth.append(wav)
 
             if torch.cuda.is_available():
@@ -870,9 +870,10 @@ def compute_evaluation_metrics(
         mel.cuda()
         MSE.cuda()
 
-    progress = tqdm(enumerate(dataloader), desc="", total=EVAl_NUM_SAMPLES)
+    # progress = tqdm(enumerate(dataloader), desc="", total=EVAl_NUM_SAMPLES)
+    progress = tqdm(enumerate(dataloader), desc="")
 
-    for i, (spectrograms, waveforms) in progress:
+    for i, (spectrograms, waveforms, wav_name) in progress:
         if torch.cuda.is_available():
             spectrograms = spectrograms.cuda()
 
@@ -881,30 +882,30 @@ def compute_evaluation_metrics(
         spectrograms_gen = mel(wav_gen.unsqueeze(0))
 
         write_audio(
-            os.path.join(path, "..", "waveforms", "%05d.wav" % (i + 1)),
+            os.path.join(path, "..", "waveforms", "%s.wav" % (wav_name)),
             waveforms,
             AUDIO_SAMPLE_RATE,
         )
         write_audio(
-            os.path.join(path, "%05d.wav" % (i + 1)), wav_gen, AUDIO_SAMPLE_RATE
+            os.path.join(path, "%s.wav" % (wav_name)), wav_gen, AUDIO_SAMPLE_RATE
         )
 
         # WaveRNN and WaveNet generate waveform with a different length than the original one.
         # For that the following metrics should be computed separately.
-        if model.command not in ["wavernn", "wavenet"]:
-            metrics["ssim"].append(
-                ssim(
-                    spectrograms.unsqueeze(0),
-                    spectrograms_gen.unsqueeze(0),
-                    data_range=1,
-                ).item()
-            )
-            mse = MSE(spectrograms, spectrograms_gen)
-            metrics["mse"].append(mse.item())
-            metrics["psnr"].append(psnr(mse).item())
-            progress.set_description(
-                ", ".join(["%s: %0.3f" % (k, np.mean(metrics[k])) for k in metrics])
-            )
+        # if model.command not in ["wavernn", "wavenet"]:
+        #     metrics["ssim"].append(
+        #         ssim(
+        #             spectrograms.unsqueeze(0),
+        #             spectrograms_gen.unsqueeze(0),
+        #             data_range=1,
+        #         ).item()
+        #     )
+        #     mse = MSE(spectrograms, spectrograms_gen)
+        #     metrics["mse"].append(mse.item())
+        #     metrics["psnr"].append(psnr(mse).item())
+        #     progress.set_description(
+        #         ", ".join(["%s: %0.3f" % (k, np.mean(metrics[k])) for k in metrics])
+        #     )
 
     print("Computing number of FLOPS and params...")
     metrics["flops"], metrics["n_params"] = model.get_complexity()

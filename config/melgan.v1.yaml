@@ -12,7 +12,7 @@ dataset:
   dataloader_prefetch_factor: 4
 model:
   discriminator_train_start_steps: 100000
-  n_iterations: 4000000
+  n_iterations: 400000
   generator_type: MelGANGenerator
   generator_params:
     in_channels: 80

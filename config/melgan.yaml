@@ -81,5 +81,5 @@ model:
   lambda_adv: 4.0          # Loss balancing coefficient for adversarial loss.
 
   # Training
-  n_iterations: 4000000
+  n_iterations: 400000
   discriminator_train_start_steps: 100000

@@ -26,4 +26,4 @@ model:
   - 0.2
   - 0.5
   learning_rate: 2.0e-4
-  n_iterations: 1500000
+  n_iterations: 400000

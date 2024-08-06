@@ -1,0 +1,8 @@
+# general
+*.pyc
+
+datasets/*
+
+models/**/
+!models/src
+!models/*.py

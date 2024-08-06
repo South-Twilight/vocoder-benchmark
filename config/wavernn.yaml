@@ -20,7 +20,7 @@ model:
   kernel_size: 5
   n_hidden: 128
   n_output: 128
-  n_iterations: 1500000
+  n_iterations: 400000
   learning_rate: 1.0e-3
   # see models/src/wavenet_vocoder/lrschedule.py for available lr_schedule
   lr_schedule: "step_learning_rate_decay"
